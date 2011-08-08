@@ -1,0 +1,11 @@
+.DS_Store
+.settings
+.project
+.pydevproject
+*.pyc
+*~
+local_settings.py
+static/js/compressed-*
+static/css/compressed-*
+logs
+.idea
