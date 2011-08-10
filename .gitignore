@@ -9,3 +9,4 @@ static/js/compressed-*
 static/css/compressed-*
 logs
 .idea
+pusher.log*
