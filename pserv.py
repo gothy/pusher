@@ -1,6 +1,7 @@
 from os import path as op
 from optparse import OptionParser
 import logging
+import sys
 
 import json
 import tornado.web
@@ -10,6 +11,8 @@ import tornadio.server
 
 from pika.adapters.tornado_connection import TornadoConnection
 import pika
+
+logger = logging.getLogger('pusher')
 
 class NotiPikator(object):
     '''
@@ -34,27 +37,28 @@ class NotiPikator(object):
     def remove_listener(self, rkey):
         'Remove callback for a routing key'
         
-        del self._listeners[rkey]
+        if rkey in self._listeners:
+            del self._listeners[rkey]
         self.channel.queue_unbind(exchange='mail', routing_key=str(rkey), queue='mailq')
-        logging.debug('listener for <%s> was removed' % (rkey, ))
+        logger.debug('listener for <%s> was removed' % (rkey, ))
 
     def connect(self):
         'Establish RabbitMQ connection.'
         
         self.connection = TornadoConnection(pika.ConnectionParameters(host=self._host, port=self._port), 
                                             on_open_callback=self.on_connected)
-        logging.info('connecting to RabbitMQ...')
+        logger.info('connecting to RabbitMQ...')
 
     def on_connected(self, connection):
         'Callback for successfully established connecction'
         
-        logging.info('connection with RabbitMQ is established')
+        logger.info('connection with RabbitMQ is established')
         self.connection.channel(self.on_channel_open)
 
     def on_channel_open(self, channel):
         'Callback for successfully opened connection channel'
         
-        logging.debug('RabbitMQ channel is opened')
+        logger.debug('RabbitMQ channel is opened')
         self.channel = channel
         self.channel.exchange_declare(exchange='mail', type='direct')
         self.channel.queue_declare(queue='mailq',
@@ -64,13 +68,13 @@ class NotiPikator(object):
     def on_queue_declared(self, frame):
         'Callback for successfull exchange hub and a queue on it declaration'
         
-        logging.debug('queue_declared event fired')
+        logger.debug('queue_declared event fired')
         self.channel.basic_consume(self.on_message, queue='mailq', no_ack=True)
 
     def on_message(self, ch, method, properties, body):
         'Callback on incoming event for some binded routing_key'
         
-        logging.debug('message received: %s %s' % (method.routing_key, body,))
+        logger.debug('message received: %s %s' % (method.routing_key, body,))
         self._listeners[method.routing_key](body)
 
 
@@ -86,17 +90,17 @@ class PushConnection(tornadio.SocketConnection):
     username = None
 
     def on_open(self, *args, **kwargs):
-        logging.debug('new socket.io client connection opened')
+        logger.debug('new socket.io client connection opened')
 
     def on_message(self, cmd):
-        logging.debug('cmd from %s: %s', self.username, cmd)
+        logger.debug('cmd from %s: %s', self.username, cmd)
         if cmd['cmd'] == 'auth' and 'username' in cmd:
             self.username = cmd['username']
             self.send(json.dumps({'cmd': 'auth', 'code': 0}))
             notipikator.add_listener(self.username, lambda cmd: self.send(cmd))
 
     def on_close(self):
-        logging.debug('socket.io connection closed with %s', self.username)
+        logger.debug('socket.io connection closed with %s', self.username)
         notipikator.remove_listener(self.username)
 
 #use the routes classmethod to build the correct resource
@@ -122,17 +126,31 @@ if __name__ == "__main__":
     parser.add_option("--bind_port", default=8001, help="socket.io listening port")
     parser.add_option("--lpath", default=op.join(pathname, 'pusher.log'), help="log destination")
     parser.add_option("--llevel", default='DEBUG', help="logging level (critical, error, warning, info, debug)")
+    parser.add_option("--lstdout", default=False, help="also print logs to stdout")
     
     (opts, args) = parser.parse_args()
     
-    logging.basicConfig(format='%(asctime)s: %(levelname)s : %(message)s', 
-                        filename=opts.lpath, 
-                        level=getattr(logging, opts.llevel.upper()))
+    # logging setup
+    loglevel = getattr(logging, opts.llevel.upper())
+    logger.setLevel(loglevel)
+    logger.propagate = False
+    fh = logging.FileHandler(opts.lpath)
+    formatter = logging.Formatter('%(asctime)s : %(name)s : %(levelname)s : %(message)s')
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
     
+    if opts.lstdout:
+        soh = logging.StreamHandler(sys.stdout)
+        soh.setFormatter(formatter)
+        soh.setLevel(loglevel)
+        logger.addHandler(soh)
+    
+    # connect to rabbit
     notipikator = NotiPikator(host=opts.mqhost, port=opts.mqport)
     notipikator.connect()
     
     application.settings['socket_io_port'] = opts.bind_port
     
+    # start listening
     tornadio.server.SocketServer(application)
     
