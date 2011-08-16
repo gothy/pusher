@@ -32,7 +32,7 @@ class NotiPikator(object):
         
         self._listeners[rkey] = callback
         self.channel.queue_bind(exchange='mail', routing_key=str(rkey), queue='mailq')
-        logging.debug('new listener for <%s> was set' % (rkey, ))
+        logger.debug('new listener for <%s> was set' % (rkey, ))
 
     def remove_listener(self, rkey):
         'Remove callback for a routing key'
