@@ -2,6 +2,8 @@ from os import path as op
 from optparse import OptionParser
 import logging
 import sys
+from datetime import datetime
+from time import mktime
 
 import json
 import tornado.web
@@ -19,7 +21,7 @@ class NotiPikator(object):
     This is a singleton-wannabe class for connecting, listening and triggering events from RabbitMQ.
     It uses the <pika> library with adapter to internal Tornado ioloop for non-blocking operations on MQ.
     '''
-    _listeners = {}
+    _listeners = {} # username: {conn_ts: callback, conn_ts2: callback2}
     _host = 'localhost'
     _port = 5672
     
@@ -27,20 +29,30 @@ class NotiPikator(object):
         self._host = kwargs.get('host', 'localhost')
         self._port = kwargs.get('port', 5672)
     
-    def add_listener(self, rkey, callback):
+    def add_listener(self, rkey, conn_ts, callback):
         'Add listener callback for a specific routing key'
         
-        self._listeners[rkey] = callback
+        rkey_listeners = self._listeners.get(rkey, {})
+        rkey_listeners[conn_ts] = callback
+        self._listeners[rkey] = rkey_listeners
         self.channel.queue_bind(exchange='mail', routing_key=str(rkey), queue='mailq')
-        logger.debug('new listener for <%s> was set' % (rkey, ))
+        logger.debug('new listener for <%s, %s> was set' % (rkey, conn_ts))
 
-    def remove_listener(self, rkey):
+    def remove_listener(self, rkey, conn_ts):
         'Remove callback for a routing key'
         
-        if rkey in self._listeners:
-            del self._listeners[rkey]
-        self.channel.queue_unbind(exchange='mail', routing_key=str(rkey), queue='mailq')
-        logger.debug('listener for <%s> was removed' % (rkey, ))
+        try:
+            rkey_listeners = self._listeners[rkey]
+            if conn_ts in rkey_listeners:
+                del rkey_listeners[conn_ts]
+                logger.debug('listener for <%s, %s> was removed' % (rkey, conn_ts))
+        
+            if len(rkey_listeners) == 0:
+                del self._listeners[rkey]
+                self.channel.queue_unbind(exchange='mail', routing_key=str(rkey), queue='mailq')
+                logger.debug('not listening for <%s> events anymore' % (rkey, ))
+        except KeyError:
+            pass
 
     def connect(self):
         'Establish RabbitMQ connection.'
@@ -75,7 +87,9 @@ class NotiPikator(object):
         'Callback on incoming event for some binded routing_key'
         
         logger.debug('message received: %s %s' % (method.routing_key, body,))
-        self._listeners[method.routing_key](body)
+        rkey_listeners = self._listeners.get(method.routing_key, {})
+        for ts, cb in rkey_listeners.items():
+            cb(body)
 
 
 class IndexHandler(tornado.web.RequestHandler):
@@ -88,20 +102,22 @@ class PushConnection(tornadio.SocketConnection):
     Per-user connection class with basic events for socket connect and close, message received.
     '''
     username = None
+    conn_ts = None
 
     def on_open(self, *args, **kwargs):
         logger.debug('new socket.io client connection opened')
+        self.conn_ts = int(mktime(datetime.now().timetuple()))
 
     def on_message(self, cmd):
         logger.debug('cmd from %s: %s', self.username, cmd)
         if cmd['cmd'] == 'auth' and 'username' in cmd:
             self.username = cmd['username']
             self.send(json.dumps({'cmd': 'auth', 'code': 0}))
-            notipikator.add_listener(self.username, lambda cmd: self.send(cmd))
+            notipikator.add_listener(self.username, self.conn_ts, lambda cmd: self.send(cmd))
 
     def on_close(self):
         logger.debug('socket.io connection closed with %s', self.username)
-        notipikator.remove_listener(self.username)
+        notipikator.remove_listener(self.username, self.conn_ts)
 
 #use the routes classmethod to build the correct resource
 PushRouter = tornadio.get_router(PushConnection)
