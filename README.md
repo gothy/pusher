@@ -2,19 +2,21 @@ Unite Pusher
 ========
 
 ###What for?
-Pusher is currently a dependency for uni_mail only. In future, there's a plan to use it for all system notifications like chat, uploads and so on.
+Pusher является зависимостью только для uni_mail в настоящий момент.
+В будущем планировалось, чтобы он стал основой для всех realtime-нотификаций в unite, таких как новые чаты, новые сообщения в них, аплоады фоток друзьями и т.п.<br/>
 
-uni_mail prototype web client uses Pusher for receiving realtime notifications about changes in user's mailbox, like thread or a new message in existing thread.
+Прототипный веб-интерфейс uni_mail использует Pusher для получения нотификаций в пользовательских личных сообщениях. <br/>
 
 ###How's it work?
-So basically Pusher is a light webserver, build on tornadio( https://github.com/MrJoes/tornadio ) comet framework 
-with a TornadoWeb( http://www.tornadoweb.org/ ) ioloop in its core.
+Pusher по сути представляет из себя легковесный неблокирующий веб-сервер, построенный на базе tornadio( https://github.com/MrJoes/tornadio ) comet framework c ioloop из TornadoWeb( http://www.tornadoweb.org/ ) в своем ядре. <br/>
+<b>IMPORTANT: </b> сейчас tornadio считается устаревшим, лучше перейти на вторую версию этого фреймворка https://github.com/MrJoes/tornadio2 , ориентированную на использование в связке с Socket.IO > 0.7 на стороне браузера.
 
-Pusher establises a connection with RabbitMQ on start and starts listening to the event queue.<br/>
-Each web client, that would like to receive notifications can connect to Pusher using socket.IO (http://socket.io/) 
-client library using one of the transports(like websocket, flashsocket, xhr-multipart, xhr-polling). <br/>
-For each successfully connected client, there's a username. We use this name as a routing key to add binding to the queue events.
+Pusher устанавливает соединение с RabbitMQ на старке и начинает "слушать" события в очереди сообщений.<br/>
+Каждый веб-клиент, который хочет получать нотификации в реальном времени может подключиться к нему с помощью клиентской части socket.io (http://socket.io/), который умеет работать в разных режимах (like websocket, flashsocket, xhr-multipart, xhr-polling).<br/>
+Для каждого подключенного клиента, в качестве главного ориентира для доставки сообщений используется username(uni_passport profile_id).
+Этот параметр используется как routing key, который добавляется к "прослушивающимся" в очереди сообщений RabbitMQ.
 
-So for example, user "gothy" connects, Pusher adds 'gothy' to the list of the routing keys it consumes messages for. 
-When new event pops Pusher looks up meta info of the event and send a command to the connected client.<br/>
-When this client disconnects - Pusher unbinds this routing_key and stops listening for these events.
+Для примера: пользователь "gothy" подключается, Pusher добавляет "gothy" в список routing keys, для которых он хочет получать сообщения.
+Когда приходит событие, pusher поднимает мета-информацию по событию и посылает команду соответствующему клиенту(см. метод on_message() в Notipikator). <br/>
+При отключении клиента - pusher перестает слушать события, связанные с этим пользователем, удаляя его username из интересующих его routing keys в очереди сообщений. <br/>
+По сути pusher работает как роутер для нотификаций, отправляемых пользователю.
